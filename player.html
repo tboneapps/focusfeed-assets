@@ -2,6 +2,15 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<!-- Warms up the connections the embed is about to need (DNS + TLS) before the iframe is even
+     created, shaving real time off first paint - the API script itself still has to load from
+     youtube.com, but www-widgetapi/player.js and thumbnails can start their handshake in parallel
+     with that instead of only starting once the iframe exists. -->
+<link rel="preconnect" href="https://www.youtube.com">
+<link rel="preconnect" href="https://www.youtube-nocookie.com">
+<link rel="preconnect" href="https://i.ytimg.com">
+<link rel="dns-prefetch" href="https://www.youtube.com">
+<link rel="dns-prefetch" href="https://www.youtube-nocookie.com">
 <style>html,body,#player{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style>
 </head>
 <body>
@@ -30,7 +39,13 @@ function guardAndTick(){
   hideEndscreen();
 }
 function onYouTubeIframeAPIReady(){
-  player=new YT.Player('player',{videoId:expectedVideoId,playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0},events:{
+  // youtube-nocookie.com is YouTube's own "privacy-enhanced mode" embed host (same officially
+  // supported IFrame API, just a different, cookie-free origin for the player itself) - loading
+  // from plain youtube.com can trigger a cookie-consent redirect handshake (consent.youtube.com)
+  // before the player even starts, which is what was actually behind the multi-second/25-second
+  // delays on some videos but not others: it depends on the device's account/region cookie state,
+  // not the video. nocookie skips that step entirely.
+  player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0},events:{
     onReady:function(){send('ready');player.playVideo();setInterval(guardAndTick,1000)},
     onStateChange:function(e){
       var id=currentVideoId();
