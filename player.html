@@ -26,10 +26,26 @@ function send(type,value,duration){window.ReactNativeWebView.postMessage(JSON.st
 function currentVideoId(){try{var url=player.getVideoUrl();var m=url.match(/[?&]v=([^&]+)/)||url.match(/\/embed\/([^?&]+)/)||url.match(/\/shorts\/([^?&#]+)/);return m?m[1]:null}catch(e){return null}}
 function hideEndscreen(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-endscreen'))return;var s=d.createElement('style');s.id='focusfeed-hide-endscreen';s.innerHTML='.ytp-endscreen-content,.ytp-ce-element,.ytp-ce-covering-overlay,.ytp-ce-expanding-overlay,.ytp-suggestion-set,.ytp-videowall-still,.ytp-endscreen-previous,.ytp-endscreen-next{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
-var captionsNeedResyncAfterBuffering=false;
-var captionsWereOnBeforeBuffering=false;
+// Whether the user has actually turned captions on via YouTube's own CC button - the only thing
+// that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
+// regardless of cc_load_policy, so polling "are captions showing right now" right as buffering
+// starts (the previous approach) races that reset and can read "on" when the user really had them
+// off - producing exactly the bug where pause/resume or rewind/fast-forward turned captions back
+// on. Tracking the real click instead of guessing at player state removes the race entirely.
+var captionsUserOn=false;
+var captionsButtonBound=false;
 function disableCaptions(){try{if(player&&player.unloadModule)player.unloadModule('captions')}catch(e){}}
-function isShowingCaptions(){try{var track=player.getOption('captions','track');return Boolean(track&&track.languageCode)}catch(e){return false}}
+function bindCaptionsButton(){
+  try{
+    if(captionsButtonBound)return;
+    var f=document.querySelector('#player iframe');
+    var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));
+    var btn=d&&d.querySelector('.ytp-subtitles-button');
+    if(!btn)return;
+    captionsButtonBound=true;
+    btn.addEventListener('click',function(){captionsUserOn=!captionsUserOn});
+  }catch(e){}
+}
 function guardAndTick(){
   if(!player||!player.getCurrentTime)return;
   var id=currentVideoId();
@@ -37,6 +53,7 @@ function guardAndTick(){
   lastGoodTime=player.getCurrentTime();
   send('time',lastGoodTime,player.getDuration());
   hideEndscreen();
+  bindCaptionsButton();
 }
 function onYouTubeIframeAPIReady(){
   // youtube-nocookie.com is YouTube's own "privacy-enhanced mode" embed host (same officially
@@ -51,20 +68,20 @@ function onYouTubeIframeAPIReady(){
       var id=currentVideoId();
       if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
       if(e.data===1){
+        bindCaptionsButton();
         if(!captionsInitialized){
           captionsInitialized=true;
           disableCaptions();
           setTimeout(disableCaptions,800);
           setTimeout(disableCaptions,2000);
           setTimeout(disableCaptions,3500);
-        } else if(captionsNeedResyncAfterBuffering){
-          captionsNeedResyncAfterBuffering=false;
-          if(!captionsWereOnBeforeBuffering)disableCaptions();
+        } else if(!captionsUserOn){
+          // Every resume - whether from a plain pause or a seek that passed through BUFFERING -
+          // re-asserts "off" unless the user has actually clicked CC on. YouTube may have silently
+          // reloaded the captions module in between; this simply undoes that every time, so the
+          // only way captions end up showing is a genuine click.
+          disableCaptions();
         }
-      }
-      if(e.data===3&&captionsInitialized){
-        captionsNeedResyncAfterBuffering=true;
-        captionsWereOnBeforeBuffering=isShowingCaptions();
       }
       if(e.data===0)hideEndscreen();
       send('state',e.data)
