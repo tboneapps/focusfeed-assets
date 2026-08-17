@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>html,body,#player{margin:0;width:100%;height:100%;background:#000;overflow:hidden}</style>
+</head>
+<body>
+<div id="player"></div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+var params=new URLSearchParams(window.location.search);
+var expectedVideoId=params.get('v');
+var start=parseInt(params.get('start')||'0',10)||0;
+var player;
+var lastGoodTime=start;
+function send(type,value,duration){window.ReactNativeWebView.postMessage(JSON.stringify({type:type,value:value,duration:duration}))}
+function currentVideoId(){try{var url=player.getVideoUrl();var m=url.match(/[?&]v=([^&]+)/)||url.match(/\/embed\/([^?&]+)/)||url.match(/\/shorts\/([^?&#]+)/);return m?m[1]:null}catch(e){return null}}
+function hideEndscreen(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-endscreen'))return;var s=d.createElement('style');s.id='focusfeed-hide-endscreen';s.innerHTML='.ytp-endscreen-content,.ytp-ce-element,.ytp-ce-covering-overlay,.ytp-ce-expanding-overlay,.ytp-suggestion-set,.ytp-videowall-still,.ytp-endscreen-previous,.ytp-endscreen-next{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
+var captionsInitialized=false;
+var captionsNeedResyncAfterBuffering=false;
+var captionsWereOnBeforeBuffering=false;
+function disableCaptions(){try{if(player&&player.unloadModule)player.unloadModule('captions')}catch(e){}}
+function isShowingCaptions(){try{var track=player.getOption('captions','track');return Boolean(track&&track.languageCode)}catch(e){return false}}
+function guardAndTick(){
+  if(!player||!player.getCurrentTime)return;
+  var id=currentVideoId();
+  if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
+  lastGoodTime=player.getCurrentTime();
+  send('time',lastGoodTime,player.getDuration());
+  hideEndscreen();
+}
+function onYouTubeIframeAPIReady(){
+  player=new YT.Player('player',{videoId:expectedVideoId,playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0},events:{
+    onReady:function(){send('ready');player.playVideo();setInterval(guardAndTick,1000)},
+    onStateChange:function(e){
+      var id=currentVideoId();
+      if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
+      if(e.data===1){
+        if(!captionsInitialized){
+          captionsInitialized=true;
+          disableCaptions();
+          setTimeout(disableCaptions,800);
+          setTimeout(disableCaptions,2000);
+          setTimeout(disableCaptions,3500);
+        } else if(captionsNeedResyncAfterBuffering){
+          captionsNeedResyncAfterBuffering=false;
+          if(!captionsWereOnBeforeBuffering)disableCaptions();
+        }
+      }
+      if(e.data===3&&captionsInitialized){
+        captionsNeedResyncAfterBuffering=true;
+        captionsWereOnBeforeBuffering=isShowingCaptions();
+      }
+      if(e.data===0)hideEndscreen();
+      send('state',e.data)
+    }
+  }})
+}
+</script>
+</body>
+</html>
