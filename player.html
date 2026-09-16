@@ -87,9 +87,24 @@ function guardAndTick(){
 // ever worked exactly once per video. Calling window.focus() right after handling it pulls focus
 // back to this outer page, so document.activeElement stops pointing at the iframe - which means
 // the NEXT tap inside it moves focus there again and fires blur again, every time.
+// Two rounds of trying to hide the progress bar via injected CSS (targeting specific ytp-*
+// classes, then broadly hiding everything but <video>) both failed to have any visible effect at
+// all - the real explanation is that f.contentDocument for this iframe was never actually
+// reachable in the first place. youtube-nocookie.com is a genuinely different origin from this
+// page, and the browser enforces that isolation regardless of what the try/catch around it
+// suggests; player.getCurrentTime()/getVideoUrl() etc. only ever appeared to prove DOM access
+// works because those specific calls go through the IFrame API's own sanctioned postMessage
+// bridge, not real DOM reads. So no CSS injected into that document was ever actually landing.
+// playerVars.controls:0 below is the actual, officially-supported way to remove ALL of YouTube's
+// own chrome (including this progress bar) - guaranteed to work since it's a real API parameter,
+// not a DOM hack. The cost is losing YouTube's own tap-to-pause/resume behavior along with the
+// rest of its controls, so this same tap handler now also toggles play/pause itself (via the same
+// sanctioned play/pauseVideo API calls used elsewhere in this file) to make up for that.
+var isPlaying=false;
 window.addEventListener('blur',function(){
   if(document.activeElement&&document.activeElement.tagName==='IFRAME'){
     send('tap');
+    try{if(player){if(isPlaying)player.pauseVideo();else player.playVideo()}}catch(e){}
     setTimeout(function(){window.focus()},0);
   }
 });
@@ -100,9 +115,10 @@ function onYouTubeIframeAPIReady(){
   // before the player even starts, which is what was actually behind the multi-second/25-second
   // delays on some videos but not others: it depends on the device's account/region cookie state,
   // not the video. nocookie skips that step entirely.
-  player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0},events:{
+  player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0,controls:0},events:{
     onReady:function(){send('ready');player.playVideo();hideProgressBar();setInterval(guardAndTick,1000)},
     onStateChange:function(e){
+      isPlaying=e.data===1;
       var id=currentVideoId();
       if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
       if(e.data===1){
