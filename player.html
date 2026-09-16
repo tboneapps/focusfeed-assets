@@ -25,6 +25,15 @@ var lastGoodTime=start;
 function send(type,value,duration){window.ReactNativeWebView.postMessage(JSON.stringify({type:type,value:value,duration:duration}))}
 function currentVideoId(){try{var url=player.getVideoUrl();var m=url.match(/[?&]v=([^&]+)/)||url.match(/\/embed\/([^?&]+)/)||url.match(/\/shorts\/([^?&#]+)/);return m?m[1]:null}catch(e){return null}}
 function hideEndscreen(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-endscreen'))return;var s=d.createElement('style');s.id='focusfeed-hide-endscreen';s.innerHTML='.ytp-endscreen-content,.ytp-ce-element,.ytp-ce-covering-overlay,.ytp-ce-expanding-overlay,.ytp-suggestion-set,.ytp-videowall-still,.ytp-endscreen-previous,.ytp-endscreen-next{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
+// YouTube's own progress/scrub bar at the very bottom (a thin white line showing playback
+// position) normally auto-hides along with the rest of its chrome (play/pause, captions, time),
+// but on some embeds - Shorts and regular videos alike - it stays pinned on screen permanently
+// regardless of tap state, which is exactly the "massive white line" sitting over the video.
+// Hiding it here, alongside the same chrome row it's part of, so the video is genuinely all
+// that's left once the on-screen controls fade - it comes back exactly when the rest of YouTube's
+// own chrome would (a tap), since this only touches CSS visibility, not the chrome's own show/hide
+// state machine.
+function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.ytp-progress-bar-container,.ytp-chrome-bottom{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
 // Whether the user has actually turned captions on via YouTube's own CC button - the only thing
 // that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
@@ -53,8 +62,20 @@ function guardAndTick(){
   lastGoodTime=player.getCurrentTime();
   send('time',lastGoodTime,player.getDuration());
   hideEndscreen();
+  hideProgressBar();
   bindCaptionsButton();
 }
+// A real click/tap inside the YouTube iframe never reaches this parent page as a DOM event - the
+// iframe is a different origin, so the browser fully isolates its input from us. What DOES cross
+// that boundary is focus: tapping anywhere inside the iframe (the video itself, YouTube's own
+// pause button, the progress bar, all of it) moves keyboard focus into that iframe, which fires a
+// `blur` event on this page's window. That's the only cross-origin signal available, so it's used
+// as a stand-in for "the user tapped the video somewhere" and forwarded to the app so it can
+// re-reveal its own back button in step with YouTube's own controls - not just when a specific
+// small on-screen zone is tapped.
+window.addEventListener('blur',function(){
+  if(document.activeElement&&document.activeElement.tagName==='IFRAME')send('tap');
+});
 function onYouTubeIframeAPIReady(){
   // youtube-nocookie.com is YouTube's own "privacy-enhanced mode" embed host (same officially
   // supported IFrame API, just a different, cookie-free origin for the player itself) - loading
@@ -63,7 +84,7 @@ function onYouTubeIframeAPIReady(){
   // delays on some videos but not others: it depends on the device's account/region cookie state,
   // not the video. nocookie skips that step entirely.
   player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0},events:{
-    onReady:function(){send('ready');player.playVideo();setInterval(guardAndTick,1000)},
+    onReady:function(){send('ready');player.playVideo();hideProgressBar();setInterval(guardAndTick,1000)},
     onStateChange:function(e){
       var id=currentVideoId();
       if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
