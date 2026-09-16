@@ -33,7 +33,15 @@ function hideEndscreen(){try{var f=document.querySelector('#player iframe');var 
 // that's left once the on-screen controls fade - it comes back exactly when the rest of YouTube's
 // own chrome would (a tap), since this only touches CSS visibility, not the chrome's own show/hide
 // state machine.
-function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.ytp-progress-bar-container,.ytp-chrome-bottom,.ytp-gradient-bottom,.ytp-title,.ytp-title-channel-logo,.ytp-watermark,[class*="ytp-shorts"],[class*="ytp-reel"],[class*="progress-bar"]{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
+// Targeting individual chrome pieces by class name (.ytp-chrome-bottom, .ytp-progress-bar-
+// container, etc.) kept missing whatever YouTube's newer Shorts-style embed overlay actually
+// calls its own progress indicator - it isn't part of the classic control-bar markup those
+// classes cover. Going broad instead: .html5-video-player is the one stable wrapper class every
+// YouTube embed skin (classic or Shorts-style) renders, in every version - hiding every child of
+// it EXCEPT the real <video> element itself removes any chrome/overlay regardless of what it's
+// actually called, while the video keeps playing (and taps on it still reach this container, so
+// the tap-reveal trick above still works).
+function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.html5-video-player>*:not(video):not(.html5-video-container),.html5-video-container>*:not(video){display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
 // Whether the user has actually turned captions on via YouTube's own CC button - the only thing
 // that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
