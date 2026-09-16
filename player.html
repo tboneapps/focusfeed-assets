@@ -33,7 +33,7 @@ function hideEndscreen(){try{var f=document.querySelector('#player iframe');var 
 // that's left once the on-screen controls fade - it comes back exactly when the rest of YouTube's
 // own chrome would (a tap), since this only touches CSS visibility, not the chrome's own show/hide
 // state machine.
-function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.ytp-progress-bar-container,.ytp-chrome-bottom{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
+function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.ytp-progress-bar-container,.ytp-chrome-bottom,.ytp-gradient-bottom,.ytp-title,.ytp-title-channel-logo,.ytp-watermark,[class*="ytp-shorts"],[class*="ytp-reel"],[class*="progress-bar"]{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
 // Whether the user has actually turned captions on via YouTube's own CC button - the only thing
 // that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
@@ -73,8 +73,17 @@ function guardAndTick(){
 // as a stand-in for "the user tapped the video somewhere" and forwarded to the app so it can
 // re-reveal its own back button in step with YouTube's own controls - not just when a specific
 // small on-screen zone is tapped.
+//
+// blur only fires on the TRANSITION into the iframe, not on every tap - once focus has moved into
+// the iframe, it stays there, so a second/third/... tap never re-fires blur and the reveal only
+// ever worked exactly once per video. Calling window.focus() right after handling it pulls focus
+// back to this outer page, so document.activeElement stops pointing at the iframe - which means
+// the NEXT tap inside it moves focus there again and fires blur again, every time.
 window.addEventListener('blur',function(){
-  if(document.activeElement&&document.activeElement.tagName==='IFRAME')send('tap');
+  if(document.activeElement&&document.activeElement.tagName==='IFRAME'){
+    send('tap');
+    setTimeout(function(){window.focus()},0);
+  }
 });
 function onYouTubeIframeAPIReady(){
   // youtube-nocookie.com is YouTube's own "privacy-enhanced mode" embed host (same officially
