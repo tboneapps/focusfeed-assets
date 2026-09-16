@@ -25,40 +25,25 @@ var lastGoodTime=start;
 function send(type,value,duration){window.ReactNativeWebView.postMessage(JSON.stringify({type:type,value:value,duration:duration}))}
 function currentVideoId(){try{var url=player.getVideoUrl();var m=url.match(/[?&]v=([^&]+)/)||url.match(/\/embed\/([^?&]+)/)||url.match(/\/shorts\/([^?&#]+)/);return m?m[1]:null}catch(e){return null}}
 function hideEndscreen(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-endscreen'))return;var s=d.createElement('style');s.id='focusfeed-hide-endscreen';s.innerHTML='.ytp-endscreen-content,.ytp-ce-element,.ytp-ce-covering-overlay,.ytp-ce-expanding-overlay,.ytp-suggestion-set,.ytp-videowall-still,.ytp-endscreen-previous,.ytp-endscreen-next{display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
-// YouTube's own progress/scrub bar at the very bottom (a thin white line showing playback
-// position) normally auto-hides along with the rest of its chrome (play/pause, captions, time),
-// but on some embeds - Shorts and regular videos alike - it stays pinned on screen permanently
-// regardless of tap state, which is exactly the "massive white line" sitting over the video.
-// Hiding it here, alongside the same chrome row it's part of, so the video is genuinely all
-// that's left once the on-screen controls fade - it comes back exactly when the rest of YouTube's
-// own chrome would (a tap), since this only touches CSS visibility, not the chrome's own show/hide
-// state machine.
-// Targeting individual chrome pieces by class name (.ytp-chrome-bottom, .ytp-progress-bar-
-// container, etc.) kept missing whatever YouTube's newer Shorts-style embed overlay actually
-// calls its own progress indicator - it isn't part of the classic control-bar markup those
-// classes cover. Going broad instead: .html5-video-player is the one stable wrapper class every
-// YouTube embed skin (classic or Shorts-style) renders, in every version - hiding every child of
-// it EXCEPT the real <video> element itself removes any chrome/overlay regardless of what it's
-// actually called, while the video keeps playing (and taps on it still reach this container, so
-// the tap-reveal trick above still works).
-function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.html5-video-player>*:not(video):not(.html5-video-container),.html5-video-container>*:not(video){display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
-// Whether captions should be showing right now - the ONLY thing allowed to flip this is our own
-// setCaptions() below, called from a tap on the app's own CC button (controls:0 means there's no
-// native YouTube CC button left to click at all). YouTube resets its captions module back on
-// during seeks/buffering regardless of cc_load_policy, so the repeated disableCaptions() calls
-// below still matter - they keep re-asserting whatever captionsUserOn says every time YouTube
-// tries to silently reload the module on its own.
+// Whether the user has actually turned captions on via YouTube's own CC button - the only thing
+// that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
+// regardless of cc_load_policy, so polling "are captions showing right now" right as buffering
+// starts races that reset and can read "on" when the user really had them off - producing exactly
+// the bug where pause/resume or rewind/fast-forward turned captions back on. Tracking the real
+// click instead of guessing at player state removes the race entirely.
 var captionsUserOn=false;
+var captionsButtonBound=false;
 function disableCaptions(){try{if(player&&player.unloadModule)player.unloadModule('captions')}catch(e){}}
-// Called from the RN side (webViewRef.injectJavaScript('setCaptions(true/false)')) when the app's
-// own CC button is tapped - the sanctioned IFrame API equivalent of clicking YouTube's own CC
-// button, which no longer exists in the DOM now that controls:0 removes it.
-function setCaptions(on){
-  captionsUserOn=on;
+function bindCaptionsButton(){
   try{
-    if(on){player.loadModule('captions');player.setOption('captions','track',{});}
-    else player.unloadModule('captions');
+    if(captionsButtonBound)return;
+    var f=document.querySelector('#player iframe');
+    var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));
+    var btn=d&&d.querySelector('.ytp-subtitles-button');
+    if(!btn)return;
+    captionsButtonBound=true;
+    btn.addEventListener('click',function(){captionsUserOn=!captionsUserOn});
   }catch(e){}
 }
 function guardAndTick(){
@@ -68,7 +53,7 @@ function guardAndTick(){
   lastGoodTime=player.getCurrentTime();
   send('time',lastGoodTime,player.getDuration());
   hideEndscreen();
-  hideProgressBar();
+  bindCaptionsButton();
 }
 // A real click/tap inside the YouTube iframe never reaches this parent page as a DOM event - the
 // iframe is a different origin, so the browser fully isolates its input from us. What DOES cross
@@ -76,32 +61,17 @@ function guardAndTick(){
 // pause button, the progress bar, all of it) moves keyboard focus into that iframe, which fires a
 // `blur` event on this page's window. That's the only cross-origin signal available, so it's used
 // as a stand-in for "the user tapped the video somewhere" and forwarded to the app so it can
-// re-reveal its own back button in step with YouTube's own controls - not just when a specific
-// small on-screen zone is tapped.
+// re-reveal its own back button in step with YouTube's own controls appearing/disappearing on the
+// same tap - not just when a specific small on-screen zone is tapped.
 //
 // blur only fires on the TRANSITION into the iframe, not on every tap - once focus has moved into
-// the iframe, it stays there, so a second/third/... tap never re-fires blur and the reveal only
-// ever worked exactly once per video. Calling window.focus() right after handling it pulls focus
-// back to this outer page, so document.activeElement stops pointing at the iframe - which means
-// the NEXT tap inside it moves focus there again and fires blur again, every time.
-// Two rounds of trying to hide the progress bar via injected CSS (targeting specific ytp-*
-// classes, then broadly hiding everything but <video>) both failed to have any visible effect at
-// all - the real explanation is that f.contentDocument for this iframe was never actually
-// reachable in the first place. youtube-nocookie.com is a genuinely different origin from this
-// page, and the browser enforces that isolation regardless of what the try/catch around it
-// suggests; player.getCurrentTime()/getVideoUrl() etc. only ever appeared to prove DOM access
-// works because those specific calls go through the IFrame API's own sanctioned postMessage
-// bridge, not real DOM reads. So no CSS injected into that document was ever actually landing.
-// playerVars.controls:0 below is the actual, officially-supported way to remove ALL of YouTube's
-// own chrome (including this progress bar) - guaranteed to work since it's a real API parameter,
-// not a DOM hack. The cost is losing YouTube's own tap-to-pause/resume behavior along with the
-// rest of its controls, so this same tap handler now also toggles play/pause itself (via the same
-// sanctioned play/pauseVideo API calls used elsewhere in this file) to make up for that.
-var isPlaying=false;
+// the iframe, it stays there, so a second/third/... tap never re-fires blur and the reveal would
+// only ever work once per video without this. Calling window.focus() right after handling it pulls
+// focus back to this outer page, so document.activeElement stops pointing at the iframe - which
+// means the NEXT tap inside it moves focus there again and fires blur again, every time.
 window.addEventListener('blur',function(){
   if(document.activeElement&&document.activeElement.tagName==='IFRAME'){
     send('tap');
-    try{if(player){if(isPlaying)player.pauseVideo();else player.playVideo()}}catch(e){}
     setTimeout(function(){window.focus()},0);
   }
 });
@@ -112,13 +82,18 @@ function onYouTubeIframeAPIReady(){
   // before the player even starts, which is what was actually behind the multi-second/25-second
   // delays on some videos but not others: it depends on the device's account/region cookie state,
   // not the video. nocookie skips that step entirely.
-  player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0,controls:0},events:{
-    onReady:function(){send('ready');player.playVideo();hideProgressBar();setInterval(guardAndTick,1000)},
+  // controls:1 (YouTube's own native chrome, fully back) - the controls:0 custom-UI experiment
+  // (our own play/pause/CC/seek bar replacing YouTube's) is reverted at the user's request; the
+  // white bar reported after removing YouTube's controls persisted even with controls:0, which
+  // means it was never YouTube's own chrome in the first place (most likely the iOS home
+  // indicator) - so there was nothing to gain by keeping YouTube's real controls hidden.
+  player=new YT.Player('player',{videoId:expectedVideoId,host:'https://www.youtube-nocookie.com',playerVars:{autoplay:1,playsinline:1,start:start,rel:0,modestbranding:1,fs:0,iv_load_policy:3,cc_load_policy:0,controls:1},events:{
+    onReady:function(){send('ready');player.playVideo();setInterval(guardAndTick,1000)},
     onStateChange:function(e){
-      isPlaying=e.data===1;
       var id=currentVideoId();
       if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
       if(e.data===1){
+        bindCaptionsButton();
         if(!captionsInitialized){
           captionsInitialized=true;
           disableCaptions();
@@ -127,9 +102,9 @@ function onYouTubeIframeAPIReady(){
           setTimeout(disableCaptions,3500);
         } else if(!captionsUserOn){
           // Every resume - whether from a plain pause or a seek that passed through BUFFERING -
-          // re-asserts "off" unless our own CC button has been tapped on. YouTube may have
-          // silently reloaded the captions module in between; this simply undoes that every time,
-          // so the only way captions end up showing is a genuine tap on our own CC button.
+          // re-asserts "off" unless the user has actually clicked CC on. YouTube may have silently
+          // reloaded the captions module in between; this simply undoes that every time, so the
+          // only way captions end up showing is a genuine click.
           disableCaptions();
         }
       }
