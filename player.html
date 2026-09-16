@@ -43,24 +43,22 @@ function hideEndscreen(){try{var f=document.querySelector('#player iframe');var 
 // the tap-reveal trick above still works).
 function hideProgressBar(){try{var f=document.querySelector('#player iframe');var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));if(!d||d.getElementById('focusfeed-hide-progress'))return;var s=d.createElement('style');s.id='focusfeed-hide-progress';s.innerHTML='.html5-video-player>*:not(video):not(.html5-video-container),.html5-video-container>*:not(video){display:none!important;opacity:0!important;pointer-events:none!important}';d.head.appendChild(s)}catch(e){}}
 var captionsInitialized=false;
-// Whether the user has actually turned captions on via YouTube's own CC button - the only thing
-// that's allowed to flip this. YouTube resets its captions module back on during seeks/buffering
-// regardless of cc_load_policy, so polling "are captions showing right now" right as buffering
-// starts (the previous approach) races that reset and can read "on" when the user really had them
-// off - producing exactly the bug where pause/resume or rewind/fast-forward turned captions back
-// on. Tracking the real click instead of guessing at player state removes the race entirely.
+// Whether captions should be showing right now - the ONLY thing allowed to flip this is our own
+// setCaptions() below, called from a tap on the app's own CC button (controls:0 means there's no
+// native YouTube CC button left to click at all). YouTube resets its captions module back on
+// during seeks/buffering regardless of cc_load_policy, so the repeated disableCaptions() calls
+// below still matter - they keep re-asserting whatever captionsUserOn says every time YouTube
+// tries to silently reload the module on its own.
 var captionsUserOn=false;
-var captionsButtonBound=false;
 function disableCaptions(){try{if(player&&player.unloadModule)player.unloadModule('captions')}catch(e){}}
-function bindCaptionsButton(){
+// Called from the RN side (webViewRef.injectJavaScript('setCaptions(true/false)')) when the app's
+// own CC button is tapped - the sanctioned IFrame API equivalent of clicking YouTube's own CC
+// button, which no longer exists in the DOM now that controls:0 removes it.
+function setCaptions(on){
+  captionsUserOn=on;
   try{
-    if(captionsButtonBound)return;
-    var f=document.querySelector('#player iframe');
-    var d=f&&(f.contentDocument||(f.contentWindow&&f.contentWindow.document));
-    var btn=d&&d.querySelector('.ytp-subtitles-button');
-    if(!btn)return;
-    captionsButtonBound=true;
-    btn.addEventListener('click',function(){captionsUserOn=!captionsUserOn});
+    if(on){player.loadModule('captions');player.setOption('captions','track',{});}
+    else player.unloadModule('captions');
   }catch(e){}
 }
 function guardAndTick(){
@@ -71,7 +69,6 @@ function guardAndTick(){
   send('time',lastGoodTime,player.getDuration());
   hideEndscreen();
   hideProgressBar();
-  bindCaptionsButton();
 }
 // A real click/tap inside the YouTube iframe never reaches this parent page as a DOM event - the
 // iframe is a different origin, so the browser fully isolates its input from us. What DOES cross
@@ -122,7 +119,6 @@ function onYouTubeIframeAPIReady(){
       var id=currentVideoId();
       if(id&&id!==expectedVideoId){player.loadVideoById(expectedVideoId,lastGoodTime);return}
       if(e.data===1){
-        bindCaptionsButton();
         if(!captionsInitialized){
           captionsInitialized=true;
           disableCaptions();
@@ -131,9 +127,9 @@ function onYouTubeIframeAPIReady(){
           setTimeout(disableCaptions,3500);
         } else if(!captionsUserOn){
           // Every resume - whether from a plain pause or a seek that passed through BUFFERING -
-          // re-asserts "off" unless the user has actually clicked CC on. YouTube may have silently
-          // reloaded the captions module in between; this simply undoes that every time, so the
-          // only way captions end up showing is a genuine click.
+          // re-asserts "off" unless our own CC button has been tapped on. YouTube may have
+          // silently reloaded the captions module in between; this simply undoes that every time,
+          // so the only way captions end up showing is a genuine tap on our own CC button.
           disableCaptions();
         }
       }
